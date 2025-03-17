@@ -15,7 +15,6 @@ const (
 // NewFigure создает новую случайную фигуру
 func NewFigure(fld *field.Field) *models.Figure {
 	shape := models.Shape(rand.Intn(7)) // Выбираем случайную фигуру
-	// Центрируем фигуру по горизонтали и помещаем в самый верх
 	fig := &models.Figure{
 		Shape: shape,
 		X:     field.Cols/2 - figureWidth/2, // Центрируем по горизонтали

@@ -1,8 +1,8 @@
 package game
 
 import (
+	"fmt"
 	"image/color"
-	"log"
 	"tetris/internal/field"
 	"tetris/internal/figure"
 	"tetris/internal/models"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text"
+	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 )
 
@@ -17,6 +18,26 @@ const (
 	emptyCellColorValue    = 200
 	occupiedCellColorValue = 0
 	figureColorValue       = 255
+	oneLineScore           = 100
+	twoLineScore           = 300
+	threeLineScore         = 700
+	fourLineScore          = 1500
+	//Score board
+	scoreBoardWidth  = 150
+	scoreBoardHeight = 50
+	//Game over
+	gameOverRectWidth  = 200
+	gameOverRectHeight = 100
+	gameOverRectX      = (field.ScreenWidth - gameOverRectWidth) / 2
+	gameOverRectY      = (field.ScreenHeight - gameOverRectHeight) / 2
+	//Расположение табло
+	scoreBoardX = field.ScreenWidth + 10
+	scoreBoardY = 10
+	//Pause Rect
+	pauseRectWidth  = scoreBoardWidth
+	pauseRectHeight = 30
+	pauseRectX      = scoreBoardX
+	pauseRectY      = scoreBoardY + scoreBoardHeight + 10
 )
 
 // Переменные для цветов
@@ -24,7 +45,10 @@ var (
 	emptyCellColor    = color.RGBA{emptyCellColorValue, emptyCellColorValue, emptyCellColorValue, 255}    // Серый (пустая клетка)
 	occupiedCellColor = color.RGBA{occupiedCellColorValue, occupiedCellColorValue, figureColorValue, 255} // Синий (занятая клетка)
 	figureColor       = color.RGBA{figureColorValue, occupiedCellColorValue, occupiedCellColorValue, 255} // Красный цвет
-	textColor         = color.RGBA{255, 255, 255, 255}
+	textColor         = color.RGBA{0, 0, 0, 255}                                                          // Черный цвет
+	scoreBoardColor   = color.RGBA{200, 200, 200, 255}                                                    // Серый цвет для рамки поля со счетом
+	gameOverRectColor = color.RGBA{100, 100, 100, 255}
+	pauseRectColor    = color.RGBA{200, 200, 200, 255}
 )
 
 // Game управляет игрой
@@ -33,7 +57,7 @@ type Game struct {
 	Figure       *models.Figure
 	LastDrop     time.Time
 	DropInterval time.Duration
-	GameOver     bool // Флаг окончания игры
+	GameOver     bool
 	//Переменные для сдвига
 	LastHorizontalMove     time.Time     // Время последнего горизонтального сдвига
 	HorizontalMoveInterval time.Duration // Интервал между горизонтальными сдвигами
@@ -43,6 +67,13 @@ type Game struct {
 	//Переменные для поворота
 	LastRotate     time.Time     // Время последнего поворота
 	RotateInterval time.Duration // Интервал между поворотами
+	//Счет
+	Score    int       // Текущий счет
+	fontFace font.Face // Шрифт
+	//Пауза
+	Paused        bool          //На паузе ли игра?
+	LastPause     time.Time     // Время последнего переключения паузы
+	PauseInterval time.Duration // Интервал между переключениями
 }
 
 // NewGame создает новую игру
@@ -58,6 +89,11 @@ func NewGame() *Game {
 		HorizontalDirection:    0,
 		LastRotate:             time.Now(),
 		RotateInterval:         time.Millisecond * 200, // Интервал между поворотами
+		Score:                  0,                      // Изначальный счет - 0
+		fontFace:               basicfont.Face7x13,
+		Paused:                 false,
+		LastPause:              time.Now(),
+		PauseInterval:          time.Millisecond * 200, //Интервал между паузами
 	}
 	g.Figure = figure.NewFigure(g.Field)
 	return g
@@ -65,7 +101,17 @@ func NewGame() *Game {
 
 // Update обновляет игру (каждый кадр)
 func (g *Game) Update() error {
-	if g.GameOver {
+	// Проверяем, нажата ли клавиша "P" и не прошло ли еще достаточно времени с момента последнего переключения паузы
+	if ebiten.IsKeyPressed(ebiten.KeyP) && time.Since(g.LastPause) > g.PauseInterval {
+		g.Paused = !g.Paused
+		g.LastPause = time.Now()
+	}
+
+	if g.GameOver && ebiten.IsKeyPressed(ebiten.KeyR) {
+		g.RestartGame()
+		return nil
+	}
+	if g.GameOver || g.Paused {
 		return nil
 	}
 
@@ -155,17 +201,27 @@ func (g *Game) FixFigure() {
 			}
 		}
 	}
-	log.Printf("фигура %s зафиксирована", g.Figure.Shape)
 }
 
 // ClearFullRows удаляет полностью заполненные ряды
 func (g *Game) ClearFullRows() {
+	var rowsCleared int
 	for y := 0; y < field.Rows; y++ {
 		if g.Field.IsRowFull(y) {
 			g.Field.ClearRow(y)
+			rowsCleared++
 		}
 	}
-	log.Println("проверены и очищены заполненные ряды")
+	switch rowsCleared {
+	case 1:
+		g.Score += oneLineScore
+	case 2:
+		g.Score += twoLineScore
+	case 3:
+		g.Score += threeLineScore
+	case 4:
+		g.Score += fourLineScore
+	}
 }
 
 // IsFigureColliding проверяет, сталкивается ли фигура
@@ -202,7 +258,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 
 	// Отрисовка текущей фигуры
-	if !g.GameOver {
+	if !g.GameOver && !g.Paused {
 		for row := 0; row < 4; row++ {
 			for col := 0; col < 4; col++ {
 				if g.Figure.Cells[row][col] {
@@ -214,20 +270,59 @@ func (g *Game) Draw(screen *ebiten.Image) {
 				}
 			}
 		}
+	} else if g.Paused {
+		pausedText := "Paused"
+		text.Draw(screen, pausedText, g.fontFace, field.ScreenWidth/2-(font.MeasureString(g.fontFace, pausedText).Ceil()/2), field.ScreenHeight/2+g.fontFace.Metrics().Ascent.Ceil()/2, textColor)
 	} else {
 		// Отрисовка Game Over
 		gameOverText := "Game Over"
+		restartText := "Press R to restart"
 
-		text.Draw(screen, gameOverText, basicfont.Face7x13, field.ScreenWidth/2-50, field.ScreenHeight/2, textColor)
+		// Рисуем прямоугольник
+		gameOverRect := ebiten.NewImage(gameOverRectWidth, gameOverRectHeight)
+		gameOverRect.Fill(gameOverRectColor)
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Translate(float64(gameOverRectX), float64(gameOverRectY))
+		screen.DrawImage(gameOverRect, op)
+		//Текст Game over
+		text.Draw(screen, gameOverText, g.fontFace, gameOverRectX+(gameOverRectWidth/2)-(font.MeasureString(g.fontFace, gameOverText).Ceil()/2), gameOverRectY+(gameOverRectHeight/2), textColor)
+		//Текст restart
+		text.Draw(screen, restartText, g.fontFace, gameOverRectX+(gameOverRectWidth/2)-(font.MeasureString(g.fontFace, restartText).Ceil()/2), gameOverRectY+(gameOverRectHeight/2)+g.fontFace.Metrics().Ascent.Ceil()+g.fontFace.Metrics().Descent.Ceil(), textColor)
 	}
+	//Рисуем рамку для счета
+	scoreBoard := ebiten.NewImage(scoreBoardWidth, scoreBoardHeight)
+	scoreBoard.Fill(scoreBoardColor)
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Translate(float64(scoreBoardX), float64(scoreBoardY))
+	screen.DrawImage(scoreBoard, op)
+	// Отображение очков
+	scoreText := fmt.Sprintf("Score: %d", g.Score)
+	text.Draw(screen, scoreText, g.fontFace, scoreBoardX+10, scoreBoardY+30, textColor)
+
+	//Рисуем рамку для паузы
+	pauseRect := ebiten.NewImage(pauseRectWidth, pauseRectHeight)
+	pauseRect.Fill(pauseRectColor)
+	op = &ebiten.DrawImageOptions{}
+	op.GeoM.Translate(float64(pauseRectX), float64(pauseRectY))
+	screen.DrawImage(pauseRect, op)
+
+	//Добавляем текст про паузу в прямоугольник
+	pauseText := "Press P for pause"
+	text.Draw(screen, pauseText, g.fontFace, pauseRectX+pauseRectWidth/2-(font.MeasureString(g.fontFace, pauseText).Ceil()/2), pauseRectY+pauseRectHeight/2+g.fontFace.Metrics().Ascent.Ceil()/2, textColor)
+
 }
 
 // Layout задает размер экрана
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return field.ScreenWidth, field.ScreenHeight
+	return field.ScreenWidth + scoreBoardWidth + 10, field.ScreenHeight
 }
 
 // IsFigureCollidingAfterMove проверяет, будет ли столкновение после перемещения на dx, dy
 func (g *Game) IsFigureCollidingAfterMove() bool {
 	return figure.IsFigureCollidingAfterMove(g.Figure, g.Field, 0, 1)
+}
+
+// RestartGame сбрасывает игру
+func (g *Game) RestartGame() {
+	*g = *NewGame()
 }
