@@ -1,10 +1,12 @@
 package figure
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 	"tetris/internal/field"
 	"tetris/internal/models"
+	"tetris/internal/network"
 )
 
 const (
@@ -83,26 +85,38 @@ func SetShape(f *models.Figure, shape models.Shape) {
 }
 
 // MoveLeft перемещает фигуру влево (если возможно)
-func MoveLeft(f *models.Figure, fld *field.Field) {
+func MoveLeft(f *models.Figure, fld *field.Field, ws *network.WebSocketClient, playerID int) {
 	if !IsFigureCollidingAfterMove(f, fld, -1, 0) {
 		f.X--
-		log.Printf("фигура %s сдвинута влево", f.Shape)
+		log.Printf("figure: фигура %s сдвинута влево", f.Shape)
+
+		// Отправляем событие на сервер
+		message := fmt.Sprintf(`{"type":"move","player":%d,"data":{"direction":"left"}}`, ws.PlayerID)
+		ws.SendMessage([]byte(message))
 	}
 }
 
 // MoveRight перемещает фигуру вправо (если возможно)
-func MoveRight(f *models.Figure, fld *field.Field) {
+func MoveRight(f *models.Figure, fld *field.Field, ws *network.WebSocketClient, playerID int) {
 	if !IsFigureCollidingAfterMove(f, fld, 1, 0) {
 		f.X++
 		log.Printf("фигура %s сдвинута вправо", f.Shape)
+
+		// Отправляем событие на сервер
+		message := fmt.Sprintf(`{"type":"move","player":%d,"data":{"direction":"right"}}`, ws.PlayerID)
+		ws.SendMessage([]byte(message))
 	}
 }
 
 // MoveDown перемещает фигуру вниз (если возможно)
-func MoveDown(f *models.Figure, fld *field.Field) {
+func MoveDown(f *models.Figure, fld *field.Field, ws *network.WebSocketClient, playerID int) {
 	if !IsFigureCollidingAfterMove(f, fld, 0, 1) {
 		f.Y++
 		log.Printf("фигура %s сдвинута вниз", f.Shape)
+
+		// Отправляем событие на сервер
+		message := fmt.Sprintf(`{"type":"move","player":%d,"data":{"direction":"down"}}`, ws.PlayerID)
+		ws.SendMessage([]byte(message))
 	}
 }
 

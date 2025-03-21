@@ -16,14 +16,23 @@ var upgrader = websocket.Upgrader{
 
 // HandleWebSocket обрабатывает входящие WebSocket-подключения
 func HandleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	if len(hub.Clients) >= 2 {
+		http.Error(w, "Сервер переполнен", http.StatusForbidden)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("server: ошибка при обновлении соединения: %v", err)
 		return
 	}
 
-	client := NewClient(conn, hub)
-	hub.Register <- client
+	client := hub.AddClient(conn)
+
+	// Если это второй игрок, стартуем игру
+	if len(hub.Clients) == 2 {
+		hub.Broadcast <- []byte(`{"type":"start"}`)
+	}
 
 	go client.ReadMessages()
 	go client.WriteMessages()

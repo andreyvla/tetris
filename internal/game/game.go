@@ -1,11 +1,14 @@
 package game
 
 import (
+	"encoding/json"
 	"fmt"
 	"image/color"
+	"log"
 	"tetris/internal/field"
 	"tetris/internal/figure"
 	"tetris/internal/models"
+	"tetris/internal/network"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -55,9 +58,12 @@ var (
 type Game struct {
 	Field        *field.Field
 	Figure       *models.Figure
+	WebSocket    *network.WebSocketClient
 	LastDrop     time.Time
 	DropInterval time.Duration
+	GameStarted  bool
 	GameOver     bool
+	GameResult   string
 	//Переменные для сдвига
 	LastHorizontalMove     time.Time     // Время последнего горизонтального сдвига
 	HorizontalMoveInterval time.Duration // Интервал между горизонтальными сдвигами
@@ -74,6 +80,14 @@ type Game struct {
 	Paused        bool          //На паузе ли игра?
 	LastPause     time.Time     // Время последнего переключения паузы
 	PauseInterval time.Duration // Интервал между переключениями
+}
+
+func (g *Game) SetGameStarted(started bool) {
+	g.GameStarted = started
+}
+
+func (g *Game) SetGameOver(over bool) {
+	g.GameOver = over
 }
 
 // NewGame создает новую игру
@@ -96,11 +110,31 @@ func NewGame() *Game {
 		PauseInterval:          time.Millisecond * 200, //Интервал между паузами
 	}
 	g.Figure = figure.NewFigure(g.Field)
+	wsClient, err := network.NewWebSocketClient("ws://localhost:8080/ws", g)
+	if err != nil {
+		log.Fatalf("Ошибка подключения к WebSocket: %v", err)
+	}
+	g.WebSocket = wsClient
+
 	return g
+}
+func (g *Game) MoveFigure(direction string) {
+	switch direction {
+	case "left":
+		figure.MoveLeft(g.Figure, g.Field, g.WebSocket, g.WebSocket.PlayerID)
+	case "right":
+		figure.MoveRight(g.Figure, g.Field, g.WebSocket, g.WebSocket.PlayerID)
+	case "down":
+		figure.MoveDown(g.Figure, g.Field, g.WebSocket, g.WebSocket.PlayerID)
+	}
 }
 
 // Update обновляет игру (каждый кадр)
 func (g *Game) Update() error {
+	if !g.GameStarted {
+		return nil // Ждём, пока сервер отправит "start"
+	}
+
 	// Проверяем, нажата ли клавиша "P" и не прошло ли еще достаточно времени с момента последнего переключения паузы
 	if ebiten.IsKeyPressed(ebiten.KeyP) && time.Since(g.LastPause) > g.PauseInterval {
 		g.Paused = !g.Paused
@@ -115,14 +149,12 @@ func (g *Game) Update() error {
 		return nil
 	}
 
-	// Обработка горизонтальных перемещений
 	if ebiten.IsKeyPressed(ebiten.KeyLeft) {
-		g.moveHorizontally(-1)
+		g.MoveFigure("left")
 	} else if ebiten.IsKeyPressed(ebiten.KeyRight) {
-		g.moveHorizontally(1)
-	} else {
-		g.MovingHorizontally = false
-		g.HorizontalDirection = 0
+		g.MoveFigure("right")
+	} else if ebiten.IsKeyPressed(ebiten.KeyDown) {
+		g.MoveFigure("down")
 	}
 
 	//Если есть направление, но кнопки не нажаты, значит, надо продолжать двигать
@@ -143,13 +175,13 @@ func (g *Game) Update() error {
 
 	// Ускорение падения вниз при нажатии
 	if ebiten.IsKeyPressed(ebiten.KeyDown) {
-		figure.MoveDown(g.Figure, g.Field)
+		figure.MoveDown(g.Figure, g.Field, g.WebSocket, g.WebSocket.PlayerID)
 	}
 
 	// Автоматическое падение фигуры по таймеру
 	if time.Since(g.LastDrop) > g.DropInterval {
 		if !g.IsFigureCollidingAfterMove() {
-			figure.MoveDown(g.Figure, g.Field) // Фигура двигается вниз
+			figure.MoveDown(g.Figure, g.Field, g.WebSocket, g.WebSocket.PlayerID) // Фигура двигается вниз
 		} else {
 			// Фигура столкнулась с дном или другой фигурой -> фиксируем её
 			g.FixFigure()
@@ -161,6 +193,15 @@ func (g *Game) Update() error {
 			// Если новая фигура сразу сталкивается, значит, конец игры
 			if g.IsFigureColliding() {
 				g.GameOver = true
+				winner := 3 - g.WebSocket.PlayerID
+				message := fmt.Sprintf(`{"type":"game_over","winner":%d}`, winner)
+				g.WebSocket.SendMessage([]byte(message))
+
+				log.Printf("game: Игрок %d проиграл, победил игрок %d", g.WebSocket.PlayerID, winner)
+
+				// Сообщаем клиенту о завершении игры
+				g.EndGame(winner)
+				return nil
 			}
 		}
 		g.LastDrop = time.Now()
@@ -173,18 +214,18 @@ func (g *Game) Update() error {
 func (g *Game) moveHorizontally(direction int) {
 	if !g.MovingHorizontally {
 		if direction == -1 {
-			figure.MoveLeft(g.Figure, g.Field)
+			figure.MoveLeft(g.Figure, g.Field, g.WebSocket, g.WebSocket.PlayerID)
 		} else if direction == 1 {
-			figure.MoveRight(g.Figure, g.Field)
+			figure.MoveRight(g.Figure, g.Field, g.WebSocket, g.WebSocket.PlayerID)
 		}
 		g.LastHorizontalMove = time.Now()
 		g.MovingHorizontally = true
 		g.HorizontalDirection = direction
 	} else if time.Since(g.LastHorizontalMove) > g.HorizontalMoveDelay {
 		if direction == -1 {
-			figure.MoveLeft(g.Figure, g.Field)
+			figure.MoveLeft(g.Figure, g.Field, g.WebSocket, g.WebSocket.PlayerID)
 		} else if direction == 1 {
-			figure.MoveRight(g.Figure, g.Field)
+			figure.MoveRight(g.Figure, g.Field, g.WebSocket, g.WebSocket.PlayerID)
 		}
 		g.LastHorizontalMove = time.Now()
 	}
@@ -275,19 +316,17 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		text.Draw(screen, pausedText, g.fontFace, field.ScreenWidth/2-(font.MeasureString(g.fontFace, pausedText).Ceil()/2), field.ScreenHeight/2+g.fontFace.Metrics().Ascent.Ceil()/2, textColor)
 	} else {
 		// Отрисовка Game Over
-		gameOverText := "Game Over"
-		restartText := "Press R to restart"
+		if g.GameOver {
+			message := "Game Over"
+			if g.GameResult == "win" {
+				message = "You Win! 🎉"
+			} else if g.GameResult == "lose" {
+				message = "You Lose... 😢"
+			}
 
-		// Рисуем прямоугольник
-		gameOverRect := ebiten.NewImage(gameOverRectWidth, gameOverRectHeight)
-		gameOverRect.Fill(gameOverRectColor)
-		op := &ebiten.DrawImageOptions{}
-		op.GeoM.Translate(float64(gameOverRectX), float64(gameOverRectY))
-		screen.DrawImage(gameOverRect, op)
-		//Текст Game over
-		text.Draw(screen, gameOverText, g.fontFace, gameOverRectX+(gameOverRectWidth/2)-(font.MeasureString(g.fontFace, gameOverText).Ceil()/2), gameOverRectY+(gameOverRectHeight/2), textColor)
-		//Текст restart
-		text.Draw(screen, restartText, g.fontFace, gameOverRectX+(gameOverRectWidth/2)-(font.MeasureString(g.fontFace, restartText).Ceil()/2), gameOverRectY+(gameOverRectHeight/2)+g.fontFace.Metrics().Ascent.Ceil()+g.fontFace.Metrics().Descent.Ceil(), textColor)
+			text.Draw(screen, message, g.fontFace, field.ScreenWidth/2-50, field.ScreenHeight/2, textColor)
+			text.Draw(screen, "Press R to restart", g.fontFace, field.ScreenWidth/2-70, field.ScreenHeight/2+20, textColor)
+		}
 	}
 	//Рисуем рамку для счета
 	scoreBoard := ebiten.NewImage(scoreBoardWidth, scoreBoardHeight)
@@ -324,5 +363,34 @@ func (g *Game) IsFigureCollidingAfterMove() bool {
 
 // RestartGame сбрасывает игру
 func (g *Game) RestartGame() {
-	*g = *NewGame()
+	log.Println("game: Перезапуск игры...")
+
+	wsClient, err := network.NewWebSocketClient("ws://localhost:8080/ws", g)
+	if err != nil {
+		log.Fatalf("Ошибка подключения к WebSocket: %v", err)
+	}
+	g.WebSocket = wsClient
+
+}
+
+func (g *Game) EndGame(winner int) {
+	log.Println("game: Игра завершена!")
+
+	if winner == g.WebSocket.PlayerID {
+		log.Println("game: Вы победили! 🎉")
+	} else {
+		log.Println("game: Вы проиграли... 😢")
+	}
+
+	// Устанавливаем флаг GameOver, но НЕ закрываем соединение
+	g.GameOver = true
+	g.WebSocket.GameOver = true
+
+	// Отправляем клиенту сообщение о завершении игры
+	gameOverMessage := map[string]interface{}{
+		"type":   "game_over",
+		"winner": winner,
+	}
+	msg, _ := json.Marshal(gameOverMessage)
+	g.WebSocket.Send <- msg
 }
